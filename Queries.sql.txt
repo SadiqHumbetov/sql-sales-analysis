@@ -1,0 +1,89 @@
+-- 1. Hansı məhsul qazancın əsasını verir?
+select pp.product_name as mehsul,
+       sum(oo.quantity * pp.unit_price) as total,
+       round(100 * ratio_to_report(sum(oo.quantity * pp.unit_price)) over (), 1) as faiz
+from orders oo
+join products pp on oo.product_id = pp.product_id
+where oo.status = 'Completed'
+group by pp.product_name
+order by total desc;
+
+
+-- 2. Satış artır, yoxsa azalır? (əvvəlki aya nisbətən)
+with aylar as (
+    select to_char(oo.order_date, 'YYYY-MM') as ay,
+           sum(oo.quantity * pp.unit_price) as total
+    from orders oo
+    join products pp on oo.product_id = pp.product_id
+    where oo.status = 'Completed'
+    group by to_char(oo.order_date, 'YYYY-MM'))
+select ay,
+       total,
+       total - lag(total) over (order by ay) as ferq,
+       round(100 * (total - lag(total) over (order by ay))
+             / nullif(lag(total) over (order by ay), 0), 1) as faiz
+from aylar
+order by ay;
+
+
+-- 3. Hansı bölgədə güclüyük, hansında zəifik?
+select rank() over (order by sum(oo.quantity * pp.unit_price) desc) as sira,
+       cc.city as seher,
+       sum(oo.quantity * pp.unit_price) as total
+from orders oo
+join products pp on oo.product_id = pp.product_id
+join customers cc on oo.customer_id = cc.customer_id
+where oo.status = 'Completed'
+group by cc.city
+order by sira;
+
+
+-- 4. Hansı müştərilər artıq alış-veriş etmir? (heç alış etməyən və ya son 3 ayda etməyən)
+select cc.customer_id,
+       cc.customer_name,
+       max(case when oo.status = 'Completed' then oo.order_date end) as son_alis,
+       count(case when oo.status = 'Completed' then 1 end) as tamamlanan_say
+from customers cc
+left join orders oo on oo.customer_id = cc.customer_id
+group by cc.customer_id, cc.customer_name
+having max(case when oo.status = 'Completed' then oo.order_date end) is null
+    or max(case when oo.status = 'Completed' then oo.order_date end) < add_months(sysdate, -3)
+order by son_alis nulls first;
+
+
+-- 5. Ən dəyərli müştərilərimiz kimlərdir? (müştəri və məhsul üzrə, ara cəmlərlə)
+select case when grouping(cc.customer_name) = 1 then 'Ümumi cəm' else cc.customer_name end as ad,
+       case when grouping(pp.product_name) = 1 then 'Subtotal' else pp.product_name end as mehsul,
+       sum(oo.quantity) as eded,
+       sum(oo.quantity * pp.unit_price) as total
+from orders oo
+join products pp on oo.product_id = pp.product_id
+join customers cc on oo.customer_id = cc.customer_id
+where oo.status = 'Completed'
+group by rollup(cc.customer_name, pp.product_name)
+order by grouping(cc.customer_name), total desc;
+
+
+-- 6. Bir məhsuldan nə qədər asılıyıq? (pay və kumulyativ pay)
+select product_name as mehsul,
+       total,
+       round(100 * ratio_to_report(total) over (), 1) as faiz,
+       round(100 * sum(total) over (order by total desc) / sum(total) over (), 1) as kumulyativ_faiz
+from (
+    select pp.product_name,
+           sum(oo.quantity * pp.unit_price) as total
+    from orders oo
+    join products pp on oo.product_id = pp.product_id
+    where oo.status = 'Completed'
+    group by pp.product_name)
+order by total desc;
+
+
+-- 7. Hansı məhsul "ölü qalır"? (heç tamamlanmış satışı olmayan məhsullar)
+select pp.product_name
+from products pp
+where not exists (
+    select 1
+    from orders oo
+    where oo.product_id = pp.product_id
+      and oo.status = 'Completed');
